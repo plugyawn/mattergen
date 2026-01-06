@@ -5,6 +5,7 @@ from typing import Callable
 
 import torch
 import torch.nn as nn
+from torch_scatter import scatter
 
 from mattergen.common.data.chemgraph import ChemGraph
 from mattergen.common.data.types import PropertySourceId
@@ -182,6 +183,7 @@ class GemNetTDenoiser(ScoreModel):
         property_embeddings: torch.nn.ModuleDict | None = None,
         property_embeddings_adapt: torch.nn.ModuleDict | None = None,
         element_mask_func: Callable | None = None,
+        predict_energy: bool = False,
         **kwargs,
     ):
         """Construct a GemNetTDenoiser object.
@@ -192,6 +194,7 @@ class GemNetTDenoiser(ScoreModel):
             denoise_atom_types (bool, optional): Whether to denoise the atom  types. Defaults to False.
             atom_type_diffusion (str, optional): Which type of atom type diffusion to use. Defaults to "mask".
             condition_on (Optional[List[str]], optional): Which aspects of the data to condition on. Strings must be in ["property", "chemical_system"]. If None (default), condition on ["chemical_system"].
+            predict_energy (bool, optional): Whether to predict per-structure energy. Defaults to False.
         """
         super(GemNetTDenoiser, self).__init__()
 
@@ -200,6 +203,7 @@ class GemNetTDenoiser(ScoreModel):
         self.hidden_dim = hidden_dim
         self.denoise_atom_types = denoise_atom_types
         self.atom_type_diffusion = atom_type_diffusion
+        self.predict_energy = predict_energy
 
         # torch.nn.ModuleDict: Dict[PropertyName, PropertyEmbedding]
         self.property_embeddings = torch.nn.ModuleDict(property_embeddings or {})
@@ -208,6 +212,14 @@ class GemNetTDenoiser(ScoreModel):
         self.fc_atom = nn.Linear(hidden_dim, MAX_ATOMIC_NUM + int(with_mask_type))
 
         self.element_mask_func = element_mask_func
+
+        # Energy prediction head (optional)
+        if self.predict_energy:
+            self.energy_head = nn.Sequential(
+                nn.Linear(hidden_dim, hidden_dim // 2),
+                nn.SiLU(),
+                nn.Linear(hidden_dim // 2, 1),
+            )
 
     def forward(self, x: ChemGraph, t: torch.Tensor) -> ChemGraph:
         """
@@ -261,7 +273,7 @@ class GemNetTDenoiser(ScoreModel):
         )
         pred_atom_types = self.fc_atom(output.node_embeddings)
 
-        return get_chemgraph_from_denoiser_output(
+        result = get_chemgraph_from_denoiser_output(
             pred_atom_types=pred_atom_types,
             pred_lattice_eps=output.stress,
             pred_cart_pos_eps=output.forces,
@@ -269,6 +281,18 @@ class GemNetTDenoiser(ScoreModel):
             element_mask_func=self.element_mask_func,
             x_input=x,
         )
+
+        # Optionally predict per-structure energy
+        if self.predict_energy:
+            # Per-atom energy contributions
+            atom_energies = self.energy_head(output.node_embeddings).squeeze(-1)  # (N_atoms,)
+            # Sum to per-structure energy
+            structure_energies = scatter(
+                atom_energies, batch, dim=0, reduce="sum"
+            )  # (N_cryst,)
+            result = result.replace(predicted_energy=structure_energies)
+
+        return result
 
     @property
     def cond_fields_model_was_trained_on(self) -> list[PropertySourceId]:
