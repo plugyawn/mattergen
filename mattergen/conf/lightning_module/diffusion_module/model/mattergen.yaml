@@ -19,6 +19,7 @@ gemnet:
   scale_file: ${oc.env:PROJECT_ROOT}/common/gemnet/gemnet-dT.json
 denoise_atom_types: true
 atom_type_diffusion: mask
+predict_energy: false  # Set to true for energy-aware training
 property_embeddings_adapt: {}
 property_embeddings: {}
 defaults: [] # NOTE: to train a conditional model, unccoment entries such as property_embeddings@property_embeddings.chemical_system: chemical_system below and edit/add properties to the defaults list as desired.
