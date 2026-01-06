@@ -7,6 +7,66 @@ This document provides a comprehensive analysis of Microsoft's MatterGen codebas
 
 ---
 
+## Quick Start: Energy-Aware Training
+
+### What Was Added
+
+This fork adds **physics-aware diffusion training** to MatterGen through energy supervision:
+
+| File | Change |
+|------|--------|
+| `mattergen/denoiser.py` | Added `predict_energy` option and `energy_head` MLP |
+| `mattergen/common/loss.py` | Added `EnergyAwareMaterialsLoss` class |
+| `mattergen/conf/.../energy_aware.yaml` | New config for energy-aware training |
+| `mattergen/conf/.../mattergen_energy_aware.yaml` | Model config with energy enabled |
+
+### How to Run Energy-Aware Training
+
+**Option 1: Use the dedicated config**
+```bash
+python scripts/train.py lightning_module/diffusion_module=energy_aware
+```
+
+**Option 2: Override at command line**
+```bash
+python scripts/train.py \
+    lightning_module.diffusion_module.model.predict_energy=true \
+    "lightning_module.diffusion_module.loss_fn._target_=mattergen.common.loss.EnergyAwareMaterialsLoss" \
+    lightning_module.diffusion_module.loss_fn.energy_weight=0.1
+```
+
+**Option 3: Modify existing config**
+```yaml
+# In your config file
+loss_fn:
+  _target_: mattergen.common.loss.EnergyAwareMaterialsLoss
+  energy_weight: 0.1  # Adjust as needed
+  energy_target_key: "formation_energy_per_atom"
+  # ... other loss params
+```
+
+### Configuration Options
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `predict_energy` | `false` | Enable energy prediction head in model |
+| `energy_weight` | `0.1` | Weight for energy loss term |
+| `energy_target_key` | `"formation_energy_per_atom"` | Key for target energy in dataset |
+| `energy_pred_key` | `"predicted_energy"` | Key for model's energy prediction |
+
+### Requirements
+
+- Dataset must include `formation_energy_per_atom` column (or your custom `energy_target_key`)
+- The MP-20 and Alexandria datasets include this field
+
+### Expected Behavior
+
+- Training will log an additional `energy` metric
+- Energy loss is only computed when target energies are available in the batch
+- Backward compatible: existing configs work unchanged
+
+---
+
 ## Table of Contents
 
 1. [Executive Summary](#executive-summary)
